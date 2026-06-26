@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# braid working state (created next to a tracked file, not part of the source)
+.braid/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
