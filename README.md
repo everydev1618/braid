@@ -1,5 +1,7 @@
 # braid
 
+[![CI](https://github.com/everydev1618/braid/actions/workflows/ci.yml/badge.svg)](https://github.com/everydev1618/braid/actions/workflows/ci.yml)
+
 A clean-slate version control system for the agentic age — concurrent agent sessions woven
 into one always-green `main`, with no PRs. See [DESIGN.md](DESIGN.md) for the full architecture.
 
