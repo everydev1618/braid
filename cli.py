@@ -27,26 +27,29 @@ def _repo():
 
 
 def cmd_init(args):
-    repo = BraidRepo.init(args.file)
+    repo = BraidRepo.init(args.path)
     main = repo.load_main()
+    ndefs = sum(len(st["order"]) for st in main["files"].values())
     print(f"initialized braid repo at {repo.bdir}")
-    print(f"tracking {repo.tracked_basename}: {len(main['defs'])} definitions "
-          f"({', '.join(main['order'])})")
+    print(f"tracking {len(main['files'])} file(s), {ndefs} definitions:")
+    for path, st in sorted(main["files"].items()):
+        print(f"  {path}: {', '.join(st['order']) or '(no defs)'}")
 
 
 def cmd_status(args):
     repo = _repo()
     main = repo.load_main()
-    print(f"tracking: {repo.tracked_basename}")
-    print(f"main: {len(main['defs'])} defs -> {', '.join(main['order'])}")
+    print(f"tracking {len(main['files'])} file(s):")
+    for path, st in sorted(main["files"].items()):
+        print(f"  {path}: {', '.join(st['order']) or '(no defs)'}")
     print(f"contracts (spec ceiling): {len(main['contracts'])}")
     for cid, src in main["contracts"]:
         print(f"  - {cid}: {src}")
     sessions = repo.load_sessions()
     print(f"pending sessions: {len(sessions)}")
     for s in sessions:
-        print(f"  - {s['id']}: \"{s['intent']}\" ({len(s['variant'])} defs, "
-              f"{len(s['contracts'])} contracts)")
+        print(f"  - {s['id']}: \"{s['intent']}\" ({len(s['edits'])} file(s), "
+              f"{len(s['contracts'])} contract(s))")
 
 
 def cmd_submit(args):
@@ -54,8 +57,8 @@ def cmd_submit(args):
     contracts = []
     for i, c in enumerate(args.contract or []):
         contracts.append((f"{args.id}-c{i}", c))
-    repo.submit(args.id, args.file, args.intent or "", contracts, model=args.model)
-    print(f"submitted session '{args.id}' from {args.file} "
+    repo.submit(args.id, args.path, args.intent or "", contracts, model=args.model, as_path=args.as_path)
+    print(f"submitted session '{args.id}' from {args.path} "
           f"({len(contracts)} contract(s))")
 
 
@@ -105,32 +108,35 @@ def cmd_reconcile(args):
         for sid, names in res.conflicts:
             print(f"  conflict: {sid} on {sorted(names)} (main kept the green version)")
     if args.apply:
-        print(f"\napplied -> {repo.tracked_basename} updated; escalated sessions kept pending.")
+        print("\napplied -> changed files written; escalated sessions kept pending.")
     else:
         print("\n(dry run -- pass --apply to write main and record provenance)")
 
 
 def cmd_show(args):
     repo = _repo()
-    main = repo.load_main()
-    names = [args.name] if args.name else main["order"]
-    for name in names:
-        if name not in main["defs"]:
-            print(f"no definition `{name}`")
-            continue
-        src = main["defs"][name]
-        print(f"# {name}  [{normalize_hash(src)[:12]}]")
+    if args.name:
+        unit, src = repo.source_of(args.name)
+        print(f"# {unit}  [{normalize_hash(src)[:12]}]")
         print(src.rstrip() + "\n")
+        return
+    main = repo.load_main()
+    for path, st in sorted(main["files"].items()):
+        for name in st["order"]:
+            src = st["defs"][name]
+            print(f"# {path}::{name}  [{normalize_hash(src)[:12]}]")
+            print(src.rstrip() + "\n")
 
 
 def cmd_log(args):
     repo = _repo()
-    names = [args.name] if args.name else repo.load_main()["order"]
-    for name in names:
-        hist = repo.history(name)
+    units = [repo.resolve_unit(args.name)] if args.name else \
+            [f"{p}::{n}" for p, n in repo.list_units()]
+    for unit in units:
+        hist = repo.history(unit)
         if not hist:
             continue
-        print(f"{name}:")
+        print(f"{unit}:")
         for cell in hist:
             print(f"  seq {cell.seq:<3} {cell.agent:<16} [{cell.realization_hash[:12]}]")
 
@@ -154,14 +160,17 @@ def build_parser():
     p = argparse.ArgumentParser(prog="braid", description="version control for the agentic age")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init"); s.add_argument("file"); s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("init", help="track a .py file or a directory of them")
+    s.add_argument("path")
+    s.set_defaults(fn=cmd_init)
     sub.add_parser("status").set_defaults(fn=cmd_status)
 
-    s = sub.add_parser("submit")
-    s.add_argument("file")
+    s = sub.add_parser("submit", help="submit an edited file or directory as a session")
+    s.add_argument("path")
     s.add_argument("--id", required=True)
     s.add_argument("--intent", default="")
     s.add_argument("--contract", action="append", help="an executable assertion; repeatable")
+    s.add_argument("--as", dest="as_path", help="map a single file to this tracked relpath")
     s.add_argument("--model", default="unknown")
     s.set_defaults(fn=cmd_submit)
 

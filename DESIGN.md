@@ -290,17 +290,19 @@ if it can't. So the first falsifiable prototype of braid is the **normalizer (la
   contradictions escalate; main stays green throughout (`demo_live.py`: a mixed workload —
   slow+fast flag agents merged in sequence, a disjoint version bump, a rogue contradiction
   escalated, 3.9× context dedup). `use_leases=False` reproduces the optimistic starvation.
-- `repo.py` + `cli.py` + `braid` — **a usable CLI prototype**. A `.braid/` store over a real
-  Python file: `braid init / submit / diff / abandon / reconcile [--apply] / status / show /
-  blame / log`. Parses
-  top-level defs (+ an `import` preamble carried as a materialized unit), persists main /
-  contracts / sessions / provenance to disk, and writes the merged module back. Agents submit
-  full edited copies as sessions; reconcile runs the real engine, records who/what produced each
-  def, and keeps `main` green; conflicting sessions stay pending. See `README.md`.
+- `repo.py` + `cli.py` + `braid` — **a usable, multi-file CLI prototype**. A `.braid/` store
+  over a Python file *or directory*: `braid init / submit / diff / abandon /
+  reconcile [--apply] / status / show / blame / log`. Units are keyed `path::name` (so the same
+  function name in different files never collides); each file's `import` preamble is carried as a
+  materialized unit. A session is a set of file edits relative to main (a single file via `--as`,
+  or a whole edited tree); reconcile splits merged units back per file and writes each changed
+  file, records who/what produced each def, and keeps `main` green; conflicts stay pending.
+  See `README.md`. (Cross-file dependency *tiers* degrade to Tier-0 — `free_names` returns real
+  names, not `path::name` — cosmetic, since both auto-merge.)
 - Tests: normalizer/reconciler/contracts/merge (7) + provenance (8) + fairness (5) + live (5)
   + repo (11) = 57 across 8 suites; 6 demos.
 
 Not yet built (DESIGN.md §5): flake quarantine; exact incremental test selection; wiring
-`make_llm_proposer` to a real Claude call; multi-file repos (one module today); richer
-normalization (import sorting, statement commutativity); agents that actually re-realize (the
-live sim uses fixed per-session variants).
+`make_llm_proposer` to a real Claude call; richer normalization (import sorting, statement
+commutativity, cross-file dependency tiers); agents that actually re-realize (the live sim uses
+fixed per-session variants).

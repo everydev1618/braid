@@ -22,31 +22,35 @@ Pure Python 3, standard library only. Run tests with `python3 test_*.py` (no pyt
 ## Quick start
 
 ```sh
-# track a Python module
-./braid init mymodule.py
+# track a single module, or a whole directory of .py files
+braid init mymodule.py        # or:  braid init .   (run commands from inside the tracked dir)
 
-# two agents each produce a full edited copy of the module
-./braid submit agent_a.py --id alice --intent "make checkout idempotent" \
-        --contract "assert checkout(cart) == checkout(checkout(cart))"
-./braid submit agent_b.py --id bob   --intent "add discount handling"
+# agents submit edits: a single file (mapped with --as), or a whole edited copy of the tree
+braid submit agent_a.py --id alice --as checkout.py \
+      --intent "make checkout idempotent" \
+      --contract "assert checkout(cart) == checkout(checkout(cart))"
+braid submit ./agent_b_worktree --id bob --intent "add discount handling"
 
 # see what would happen, then apply
-./braid reconcile
-./braid reconcile --apply        # writes mymodule.py, records provenance
+braid reconcile
+braid reconcile --apply        # writes the changed files, records provenance
 
 # inspect / manage pending work
-./braid diff alice               # preview a pending session vs main (by meaning)
-./braid abandon bob              # drop a pending/escalated session
-./braid status
-./braid show checkout            # source + content hash
-./braid blame checkout           # which agent/intent produced it
-./braid log                      # provenance history per definition
+braid diff alice               # preview a pending session vs main (by meaning)
+braid abandon bob              # drop a pending/escalated session
+braid status
+braid show checkout            # source + content hash (bare name, or path::name)
+braid blame checkout           # which agent/intent produced it
+braid log                      # provenance history per definition
 ```
 
-A session is just a full edited copy of the tracked module. braid diffs it against `main` by
-*normalized* meaning, classifies each change, gates it on contracts, and (with `--apply`)
-writes the merged result back and records who/what produced each definition. Conflicting
-sessions stay pending for a human; `main` always stays green.
+A session is a set of file edits relative to `main` — a single file (mapped to a tracked path
+with `--as`) or a whole edited copy of the tree. braid diffs it by *normalized* meaning, keyed
+by `path::name` so the same function name in different files never collides; classifies each
+change; gates it on contracts; and (with `--apply`) writes each changed file back and records
+who/what produced every definition. Conflicting sessions stay pending for a human; `main`
+always stays green. The `.braid/` store lives at the repo root — run commands from inside it,
+like `git`.
 
 ## Layout
 
@@ -66,5 +70,5 @@ sessions stay pending for a human; `main` always stays green.
 
 A coherent end-to-end prototype, not a deployable system. All four original goals plus the
 hard concurrency problem have working, tested slices (54 tests, 8 suites). Not yet built:
-flake quarantine, exact incremental test selection, real model wiring, multi-file repos, and
-richer normalization (import sorting, statement-level commutativity). See DESIGN.md §5.
+flake quarantine, exact incremental test selection, real model wiring, and richer normalization
+(import sorting, statement-level commutativity, cross-file dependency tiers). See DESIGN.md §5.

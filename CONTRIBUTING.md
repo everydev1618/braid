@@ -61,7 +61,6 @@ python3 cli.py --help            # the CLI (or ./braid once on your PATH)
 
 These are concrete gaps called out in DESIGN.md §5:
 
-- **Multi-file repos** — `repo.py` tracks a single module today; generalize to a directory.
 - **Richer normalization** — import sorting and statement-level commutativity (layers 3–4),
   each with a confluence argument and tests.
 - **Real model wiring** — turn `make_llm_proposer` into an actual API call behind the existing
