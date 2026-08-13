@@ -114,7 +114,9 @@ def cmd_reconcile(args):
     print(f"\n{len(admitted)}/{n} integrated, {len(conflicts)} escalated.")
     if conflicts:
         for sid, names in res.conflicts:
-            print(f"  conflict: {sid} on {sorted(names)} (main kept the green version)")
+            _, detail = res.status[sid]
+            what = "broke contract(s)" if detail.startswith("contract failure") else "contested"
+            print(f"  conflict: {sid} {what} {sorted(names)} (main kept the green version)")
     if args.apply:
         print("\napplied -> changed files written; escalated sessions kept pending.")
     else:
@@ -201,9 +203,12 @@ def cmd_rebuild(args):
 
     if res.exact and res.green:
         print("\nthe intent rebuilds *the* program, not merely *a* program.")
-    elif res.green:
-        print("\nthe divergent definitions are the residual decisions the intent "
-              "underdetermines -- still green.")
+    elif res.divergent and res.green:
+        print(f"\n{len(res.divergent)} definition(s) rebuilt differently but stayed green: the "
+              "residual decisions the intent underdetermines.")
+    if res.missing:
+        print(f"{len(res.missing)} definition(s) predate any recorded session, so there is no "
+              "intent to rebuild from; they were carried from the pin.")
     if args.apply:
         print("\napplied -> working tree restored from the pinned realization.")
 
