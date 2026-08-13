@@ -19,6 +19,7 @@ import argparse
 import difflib
 import os
 import sys
+import textwrap
 
 import llm
 import lang
@@ -31,30 +32,145 @@ def _repo():
     return BraidRepo.find(".")
 
 
+# --- how braid talks -------------------------------------------------------
+#
+# One voice across every command: count things and inflect them ("1 file", not "1 file(s)"),
+# label a block instead of dumping it, never answer with a bare `0` or with silence, and end
+# with the next useful thing to type. `(s)` is how a program talks; braid is talking to a
+# person who has just arrived.
+
+LABEL = 12          # width of the left-hand label column
+WIDTH = 88          # wrap prose here: a report should fit a terminal, not run off it
+
+
+def plural(n: int, noun: str, suffix: str = "s") -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}{suffix}"
+
+
+def row(label: str, value: str, wrap: bool = True) -> str:
+    """A labelled line, wrapped under its own label rather than off the screen.
+
+    `wrap=False` for values that must survive a copy-paste -- a wrapped path is a broken
+    path, and a long one is better off overflowing than mangled.
+    """
+    indent = " " * (2 + LABEL)
+    first = f"  {label:<{LABEL}}{value}"
+    if not wrap or len(first) <= WIDTH or " " not in value:
+        return first
+    lines = textwrap.wrap(value, width=WIDTH - len(indent)) or [value]
+    return "\n".join([f"  {label:<{LABEL}}{lines[0]}"] + [indent + ln for ln in lines[1:]])
+
+
+def sub(value: str, indent: int = LABEL + 2) -> str:
+    return " " * indent + value
+
+
+def clip(text: str, limit: int = 92) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def columns(pairs, indent: int = 4, cap: int = 34) -> list:
+    """`command   why` lines, aligned to the longest command but never past the screen."""
+    width = min(max(len(cmd) for cmd, _ in pairs), cap)
+    pad = " " * indent
+    out = []
+    for cmd, why in pairs:
+        if len(cmd) > width:                       # too long to share a line
+            out += [pad + cmd, pad + " " * (width + 2) + why]
+        else:
+            out.append(f"{pad}{cmd:<{width}}  {why}")
+    return out
+
+
+def nexts(*pairs) -> list:
+    """A trailing `next` block: (command, why) pairs, aligned under a `next` label."""
+    pairs = [p for p in pairs if p]
+    if not pairs:
+        return []
+    lines = columns(pairs, indent=2 + LABEL)
+    first = lines[0].lstrip()
+    return ["", f"  {'next':<{LABEL}}{first}"] + lines[1:]
+
+
+def _provenance_line(repo, main) -> str:
+    """How much of main carries a recorded intent -- braid's whole point, so never hidden."""
+    units = repo.list_units()
+    if not units:
+        return "nothing tracked yet"
+    log = repo._load_log()
+    covered = sum(1 for p, n in units if log.history_of(f"{p}::{n}"))
+    if covered == 0:
+        return ("no definition carries a recorded intent yet -- nothing has landed through a "
+                "session, so `blame` and `rebuild` have nothing to work from")
+    if covered == len(units):
+        return f"all {plural(covered, 'definition')} carry a recorded intent"
+    return (f"{covered} of {len(units)} definitions carry a recorded intent "
+            f"(the rest were tracked at init)")
+
+
+def _session_rows(sessions: list, indent: int = LABEL + 2) -> list:
+    width = max(len(s["id"]) for s in sessions)
+    out = []
+    for s in sessions:
+        detail = f"{plural(len(s['edits']), 'file')}"
+        if s["contracts"]:
+            detail += f", {plural(len(s['contracts']), 'contract')}"
+        intent = s["intent"] or "(no intent recorded)"
+        out.append(sub(f"{s['id']:<{width}}  \"{clip(intent, 60)}\"  ({detail})", indent))
+    return out
+
+
 def cmd_init(args):
     repo = BraidRepo.init(args.path)
     main = repo.load_main()
-    ndefs = sum(len(st["order"]) for st in main["files"].values())
-    print(f"initialized braid repo at {repo.bdir}")
-    print(f"tracking {len(main['files'])} {main['lang']} file(s), {ndefs} definitions:")
-    for path, st in sorted(main["files"].items()):
-        print(f"  {path}: {', '.join(st['order']) or '(no defs)'}")
+    files = main["files"]
+    ndefs = sum(len(st["order"]) for st in files.values())
+    out = [f"tracking {plural(ndefs, 'definition')} across {plural(len(files), 'file')} "
+           f"as {main['lang']}:", ""]
+    width = max(len(p) for p in files)
+    for path, st in sorted(files.items()):
+        out.append(sub(f"{path:<{width}}  {', '.join(st['order']) or '(no definitions)'}", 2))
+    out += ["", row("store", repo.bdir, wrap=False)]
+    out += nexts(("braid status", "the same picture, any time"),
+                 ("braid submit <path> --id <who>", "queue an edit (--intent, --contract)"))
+    print("\n".join(out))
 
 
 def cmd_status(args):
     repo = _repo()
     main = repo.load_main()
-    print(f"tracking {len(main['files'])} {main['lang']} file(s):")
-    for path, st in sorted(main["files"].items()):
-        print(f"  {path}: {', '.join(st['order']) or '(no defs)'}")
-    print(f"contracts (spec ceiling): {len(main['contracts'])}")
-    for cid, src in main["contracts"]:
-        print(f"  - {cid}: {src}")
-    sessions = repo.load_sessions()
-    print(f"pending sessions: {len(sessions)}")
-    for s in sessions:
-        print(f"  - {s['id']}: \"{s['intent']}\" ({len(s['edits'])} file(s), "
-              f"{len(s['contracts'])} contract(s))")
+    files, sessions = main["files"], repo.load_sessions()
+    units = repo.list_units()
+
+    out = [row("repo", f"{repo.root}  ({main['lang']})", wrap=False),
+           row("main", f"{plural(len(units), 'definition')} across {plural(len(files), 'file')}")]
+    width = max(len(p) for p in files)
+    for path, st in sorted(files.items()):
+        out.append(sub(f"{path:<{width}}  {', '.join(st['order']) or '(no definitions)'}"))
+
+    if main["contracts"]:
+        out.append(row("contracts", f"{plural(len(main['contracts']), 'contract')} in the spec "
+                                    "ceiling -- no session may weaken these"))
+        cwidth = max(len(cid) for cid, _ in main["contracts"])
+        for cid, src in main["contracts"]:
+            out.append(sub(f"{cid:<{cwidth}}  {clip(src)}"))
+    else:
+        out.append(row("contracts", "none yet -- a session's --contract joins the ceiling "
+                                    "when it lands"))
+
+    out.append(row("provenance", _provenance_line(repo, main)))
+
+    if sessions:
+        out.append(row("pending", f"{plural(len(sessions), 'session')} waiting to land"))
+        out += _session_rows(sessions)
+        out += nexts((f"braid diff {sessions[0]['id']}", "preview it against main"),
+                     ("braid reconcile", "see what would land; --apply writes it"))
+    else:
+        out.append(row("pending", "nothing waiting to land"))
+        out += nexts(("braid submit <path> --id <who>",
+                      "queue an edit (--intent, --contract)"))
+    print("\n".join(out))
 
 
 def cmd_submit(args):
@@ -63,32 +179,44 @@ def cmd_submit(args):
     for i, c in enumerate(args.contract or []):
         contracts.append((f"{args.id}-c{i}", c))
     repo.submit(args.id, args.path, args.intent or "", contracts, model=args.model, as_path=args.as_path)
-    print(f"submitted session '{args.id}' from {args.path} "
-          f"({len(contracts)} contract(s))")
+    gate = (f"gated by {plural(len(contracts), 'contract')}" if contracts
+            else "no contracts of its own -- it still has to keep the ceiling green")
+    out = [f"queued session '{args.id}' from {args.path}",
+           row("intent", args.intent or "(none given -- `braid rebuild` needs one to work from)"),
+           row("gate", gate)]
+    out += nexts((f"braid diff {args.id}", "see what it changes, by meaning"),
+                 ("braid reconcile", "see whether it lands; --apply writes it"))
+    print("\n".join(out))
 
 
 def cmd_sessions(args):
     repo = _repo()
     sessions = repo.load_sessions()
     if not sessions:
-        print("no pending sessions")
+        out = ["nothing waiting to land."]
+        out += nexts(("braid submit <path> --id <who>",
+                      "queue an edit against main"))
+        print("\n".join(out))
         return
-    for s in sessions:
-        print(f"{s['id']:<16} \"{s['intent']}\"")
+    out = [f"{plural(len(sessions), 'session')} waiting to land:", ""] + _session_rows(sessions, 2)
+    out += nexts((f"braid diff {sessions[0]['id']}", "preview it against main"),
+                 ("braid reconcile", "see what would land; --apply writes it"))
+    print("\n".join(out))
 
 
 def cmd_abandon(args):
     repo = _repo()
     repo.abandon(args.id)
-    print(f"abandoned pending session '{args.id}'")
+    print(f"dropped session '{args.id}'. main is untouched -- nothing of it landed.")
 
 
 def cmd_diff(args):
     repo = _repo()
     d = repo.diff(args.id)
-    print(f"session '{args.id}': \"{d['intent']}\"")
+    print(f"session '{args.id}': \"{d['intent'] or '(no intent recorded)'}\"")
     if not d["items"]:
-        print("  (no effective change -- normalizes to current main)")
+        print("\n  no effective change: this normalizes to exactly what main already says.")
+        print("  reconciling it is a no-op -- which is the point, not a failure.")
         return
     for item in d["items"]:
         print(f"\n  {item['kind'].upper()} {item['name']}")
@@ -110,34 +238,52 @@ def cmd_reconcile(args):
                              "ANTHROPIC_API_KEY (or run `ant auth login`)")
         proposer = llm.make_merge_proposer()
     res, admitted, conflicts = repo.reconcile(apply=args.apply, proposer=proposer)
+    swidth = max(len(sid) for sid in res.status) if res.status else 0
+    out = []
     for sid, (tier, detail) in res.status.items():
         mark = "x" if sid in conflicts else "+"
-        print(f"  [{mark}] {sid:<16} {TIER[tier]:<20} {detail}")
+        out.append(f"  [{mark}] {sid:<{swidth}}  {TIER[tier]:<20} {clip(detail, 70)}")
     n = len(res.status)
-    print(f"\n{len(admitted)}/{n} integrated, {len(conflicts)} escalated.")
-    if conflicts:
-        for sid, names in res.conflicts:
-            _, detail = res.status[sid]
-            what = "broke contract(s)" if detail.startswith("contract failure") else "contested"
-            print(f"  conflict: {sid} {what} {sorted(names)} (main kept the green version)")
-    if args.apply:
-        print("\napplied -> changed files written; escalated sessions kept pending.")
+    verb = "landed" if args.apply else "would land"
+    stayed = "main stayed green" if args.apply else "main stays green"
+    if admitted:
+        landed = f"{plural(len(admitted), 'session')} {verb}"
+        if n != len(admitted):
+            landed += f" of {n}"
     else:
-        print("\n(dry run -- pass --apply to write main and record provenance)")
+        landed = "nothing landed" if args.apply else "nothing would land"
+    out += ["", f"  {landed}" + (f", {plural(len(conflicts), 'session')} escalated to you"
+                                 if conflicts else f" -- {stayed}")]
+    for sid, names in res.conflicts:
+        _, detail = res.status[sid]
+        what = "broke a contract" if detail.startswith("contract failure") else "contested"
+        out.append(sub(f"{sid} {what} on {', '.join(sorted(names))}; "
+                       "main kept the version that was already green", 2))
+    if args.apply:
+        out += ["", "  written: changed files updated, provenance recorded. escalated sessions "
+                    "stay queued."]
+        if conflicts:
+            out += nexts((f"braid diff {conflicts[0]}", "see what it wanted to change"),
+                         (f"braid abandon {conflicts[0]}", "drop it and move on"))
+    else:
+        out += nexts(("braid reconcile --apply", "write main and record provenance"))
+    print("\n".join(out))
 
 
 def cmd_show(args):
     repo = _repo()
+    comment = repo.frontend().line_comment
     if args.name:
         unit, src = repo.source_of(args.name)
-        print(f"# {unit}  [{lang.normalize_hash(unit, src)[:12]}]")
+        print(f"{comment} {unit}   content hash {lang.normalize_hash(unit, src)[:12]}")
         print(src.rstrip() + "\n")
         return
     main = repo.load_main()
     for path, st in sorted(main["files"].items()):
         for name in st["order"]:
             src = st["defs"][name]
-            print(f"# {path}::{name}  [{lang.normalize_hash(f'{path}::{name}', src)[:12]}]")
+            unit = f"{path}::{name}"
+            print(f"{comment} {unit}   content hash {lang.normalize_hash(unit, src)[:12]}")
             print(src.rstrip() + "\n")
 
 
@@ -145,28 +291,50 @@ def cmd_log(args):
     repo = _repo()
     units = [repo.resolve_unit(args.name)] if args.name else \
             [f"{p}::{n}" for p, n in repo.list_units()]
+    shown = 0
+    out = []
     for unit in units:
         hist = repo.history(unit)
         if not hist:
             continue
-        print(f"{unit}:")
+        shown += 1
+        out.append(f"{unit}:")
         for cell in hist:
-            print(f"  seq {cell.seq:<3} {cell.agent:<16} [{cell.realization_hash[:12]}]")
+            out.append(sub(f"seq {cell.seq:<3} {cell.agent:<16} "
+                           f"[{cell.realization_hash[:12]}]", 2))
+    if not shown:
+        what = f"'{args.name}' has" if args.name else "no definition here has"
+        out = [f"{what} any recorded history yet.",
+               "",
+               "  braid records who and what produced a definition when a session lands, so a",
+               "  tree tracked at `init` starts empty. Submit an edit and reconcile it, and the",
+               "  agent, intent, model and context behind it show up here."]
+        out += nexts(("braid submit <path> --id <who>", "queue an edit"),
+                     ("braid reconcile --apply", "land it and record provenance"))
+    print("\n".join(out))
 
 
 def cmd_blame(args):
     repo = _repo()
     cell = repo.blame(args.name)
     if cell is None:
-        print(f"{args.name}: no provenance (from base, or never reconciled)")
+        out = [f"{args.name} has no recorded provenance.",
+               "",
+               "  It was tracked when this repo was initialized rather than produced by a",
+               "  session, so there is no prompt, model or intent behind it to recover.",
+               "  Definitions that land through `braid reconcile` do carry all of that."]
+        print("\n".join(out))
         return
     ctx = repo.context_for_hash(cell.realization_hash)
-    print(f"{args.name} <- {cell.agent}")
-    print(f"  intent: {ctx.intent}")
-    print(f"  model:  {ctx.model}")
-    print(f"  hash:   {cell.realization_hash[:16]}")
+    out = [f"{args.name} was written by {cell.agent}",
+           row("intent", ctx.intent or "(none recorded)"),
+           row("model", ctx.model),
+           row("hash", cell.realization_hash[:16])]
     if ctx.files:
-        print(f"  context files: {', '.join(ctx.files)}")
+        out.append(row("context", f"{plural(len(ctx.files), 'file')} in scope: "
+                                  f"{', '.join(sorted(ctx.files))}"))
+    out += nexts((f"braid log {args.name}", "every version of it, in order"))
+    print("\n".join(out))
 
 
 def cmd_rebuild(args):
@@ -243,25 +411,27 @@ def _summary():
     units = repo.list_units()
     sessions = repo.load_sessions()
     files = main["files"]
+    ceiling = (f"{plural(len(main['contracts']), 'contract')} in the spec ceiling"
+               if main["contracts"] else "none yet")
     lines = [
-        f"  repo       {repo.root}  ({main['lang']})",
-        f"  main       {len(units)} definition(s) across {len(files)} file(s): "
-        f"{', '.join(sorted(files))}",
-        f"  contracts  {len(main['contracts'])} (the spec ceiling agents cannot weaken)",
+        row("repo", f"{repo.root}  ({main['lang']})", wrap=False),
+        row("main", f"{plural(len(units), 'definition')} across "
+                    f"{plural(len(files), 'file')}: {', '.join(sorted(files))}"),
+        row("contracts", ceiling),
     ]
     if sessions:
         who = ", ".join(s["id"] for s in sessions)
-        lines.append(f"  pending    {len(sessions)} session(s) waiting to land: {who}")
+        lines.append(row("pending", f"{plural(len(sessions), 'session')} waiting to land: {who}"))
     else:
-        lines.append("  pending    nothing waiting to land")
+        lines.append(row("pending", "nothing waiting to land"))
 
     hints = [
-        ("braid status", "tracked files, the spec ceiling, pending sessions"),
-        ("braid show", "a definition and its content hash (`braid show <name>`)"),
-        ("braid submit <path> --id <agent> --intent \"...\"", "queue an agent's edit"),
-        ("braid reconcile", "what would land; add --apply to write it"),
-        ("braid blame <name>", "the agent, intent and model behind a definition"),
-        ("braid web", "browse main, the queue and provenance in a browser"),
+        ("braid status", "this, plus contracts and provenance"),
+        ("braid show <name>", "a definition and its content hash"),
+        ("braid submit <path> --id <who>", "queue an edit (--intent, --contract)"),
+        ("braid reconcile", "what would land; --apply writes it"),
+        ("braid blame <name>", "the agent and intent behind a definition"),
+        ("braid web", "browse it all in a browser"),
     ]
     if sessions:
         hints.insert(0, ("braid diff " + sessions[0]["id"], "preview that session against main"))
@@ -285,9 +455,7 @@ def overview() -> str:
         ]
     else:
         lines, hints = found
-        out += lines + ["", "  what you can do:"]
-        width = max(len(cmd) for cmd, _ in hints)
-        out += [f"    {cmd:<{width}}  {why}" for cmd, why in hints]
+        out += lines + ["", "  what you can do:"] + columns(hints)
     out += ["", "  `braid <command> --help` for a command's options; "
             "`braid help` for this screen."]
     return "\n".join(out)

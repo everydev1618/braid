@@ -38,6 +38,7 @@ SEP = "::"
 class Frontend:
     name: str
     ext: str
+    line_comment: str
     normalize: Callable
     normalize_hash: Callable
     free_names: Callable
@@ -48,14 +49,14 @@ class Frontend:
 
 
 PYTHON = Frontend(
-    name="python", ext=".py",
+    name="python", ext=".py", line_comment="#",
     normalize=_py.normalize, normalize_hash=_py.normalize_hash, free_names=_py.free_names,
     parse_module=_py.parse_module, render_module=_py.render_module, file_state=_py.file_state,
     run_contracts=_py_contracts.run_contracts,
 )
 
 GO = Frontend(
-    name="go", ext=".go",
+    name="go", ext=".go", line_comment="//",
     normalize=_go.normalize, normalize_hash=_go.normalize_hash, free_names=_go.free_names,
     parse_module=_go.parse_module, render_module=_go.render_module, file_state=_go.file_state,
     run_contracts=_go_contracts.run_contracts,

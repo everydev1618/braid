@@ -123,7 +123,7 @@ model — the hash comparison only becomes a real test with credentials present.
 ## Status
 
 A coherent end-to-end prototype, not a deployable system. All four original goals plus the hard
-concurrency problem have working, tested slices (**135 tests, 15 suites**). Not yet built: flake
+concurrency problem have working, tested slices (**148 tests, 15 suites**). Not yet built: flake
 quarantine, exact incremental test selection, and richer normalization — import sorting,
 statement-level commutativity, cross-file dependency tiers, and desugaring (`x += 1` and
 `x = x + 1` still hash differently, as do a ternary and its `if`). The Go frontend is layer 0
