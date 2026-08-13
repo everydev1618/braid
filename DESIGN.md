@@ -299,10 +299,29 @@ if it can't. So the first falsifiable prototype of braid is the **normalizer (la
   file, records who/what produced each def, and keeps `main` green; conflicts stay pending.
   See `README.md`. (Cross-file dependency *tiers* degrade to Tier-0 — `free_names` returns real
   names, not `path::name` — cosmetic, since both auto-merge.)
-- Tests: normalizer/reconciler/contracts/merge (7) + provenance (8) + fairness (5) + live (5)
-  + repo (11) = 57 across 8 suites; 6 demos.
+- `llm.py` — **the real-model seam**, and the only file in braid that talks to a network. The
+  Anthropic SDK is imported lazily inside `make_call_model`, so the rest of braid and the whole
+  test suite stay standard-library-only and offline (`test_importing_llm_does_not_import_the_sdk`
+  pins this). `make_merge_proposer` backs the Tier-2 seam; `make_llm_realizer` backs rebuild.
+  Both validate that the model returned exactly one definition with the requested name, and both
+  treat a refusal as "no proposal" — which escalates, the correct safe default for a gate.
+  `repo.reconcile(proposer=...)` now threads the proposer through, so Tier 2 is reachable from
+  the CLI (`braid reconcile --propose`) rather than only from the engine.
+- `repo.rebuild` + `braid rebuild` — **regeneration checked against the pin**. `main.json` is the
+  lockfile holding each unit's pinned realization; rebuild regenerates every definition from its
+  recorded intent and compares by normalized hash. The target's own realization is stripped from
+  the context first, so the model cannot read back the answer it is being asked to reproduce.
+  Three buckets: identical (same meaning), divergent (a different realization of the same intent
+  — §0's residual decisions, reported and contract-checked, never hidden), and missing (no
+  recorded intent). `--apply` restores from the pin, not from the regenerated source: the lock
+  stays authoritative and the regeneration is the verification.
+- `demo_braid.py` — the capstone: the stylistic no-op, eight concurrent agents (7 land
+  unattended, one Tier-2 model-merge, one genuine contradiction escalated in English), `blame`
+  recovering a prompt from a shipped line, and the teardown/rebuild encore.
+- Tests: normalizer/reconciler/contracts/merge (7 each) + provenance (8) + fairness (5) +
+  live (5) + repo (14) + rebuild (9) + llm (9) = 78 across 10 suites; 7 demos.
 
-Not yet built (DESIGN.md §5): flake quarantine; exact incremental test selection; wiring
-`make_llm_proposer` to a real Claude call; richer normalization (import sorting, statement
-commutativity, cross-file dependency tiers); agents that actually re-realize (the live sim uses
-fixed per-session variants).
+Not yet built (DESIGN.md §5): flake quarantine; exact incremental test selection; richer
+normalization (import sorting, statement commutativity, cross-file dependency tiers, and
+desugaring — `x += 1` and `x = x + 1` still hash differently, as do a ternary and its `if`);
+agents that actually re-realize (the live sim uses fixed per-session variants).

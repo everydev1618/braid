@@ -20,8 +20,11 @@ from __future__ import annotations
 import ast
 import json
 import os
+from dataclasses import dataclass, field
 
-from provenance import CellLog, Context, ContextStore
+from contracts import run_contracts
+from normalizer import normalize_hash
+from provenance import CellLog, Context, ContextStore, load_context
 from reconciler import changeset, reconcile as reconcile_batch
 
 _DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -258,7 +261,6 @@ class BraidRepo:
         return matches[0]
 
     def blame(self, name: str):
-        from normalizer import normalize_hash
         unit = self.resolve_unit(name)
         path, defname = split_unit(unit)
         src = self.load_main()["files"][path]["defs"][defname]
@@ -273,7 +275,10 @@ class BraidRepo:
         return unit, self.load_main()["files"][path]["defs"][defname]
 
     # --- reconcile ---
-    def reconcile(self, apply: bool = False):
+    def reconcile(self, apply: bool = False, proposer=None):
+        """Fold pending sessions into main. `proposer(MergeRequest) -> source | None` is the
+        Tier-2 seam: on a same-definition overlap it suggests a union realization, admitted
+        only if the contract gate stays green (`llm.make_merge_proposer` plugs in a model)."""
         main = self.load_main()
         base_files = main["files"]
         base = units_from_files(base_files)
@@ -300,7 +305,8 @@ class BraidRepo:
                 if src is not None:
                     log.record(key, src, ctx, agent=sid)
 
-        res = reconcile_batch(base, sessions, base_contracts=base_contracts, on_admit=on_admit)
+        res = reconcile_batch(base, sessions, base_contracts=base_contracts,
+                              proposer=proposer, on_admit=on_admit)
         conflicted = {sid for sid, _ in res.conflicts}
         admitted = [sid for sid in res.status if sid not in conflicted]
 
@@ -326,6 +332,86 @@ class BraidRepo:
 
         return res, admitted, list(conflicted)
 
+    # --- rebuild ---
+    def _context_without(self, ctx: Context, unit: str) -> Context:
+        """The generating context for `unit`, with `unit`'s own realization removed.
+
+        Regeneration has to come from the *intent*. A session's context carries the whole
+        edited file, which contains the answer -- hand that to a model and the "rebuild"
+        proves nothing. Sibling definitions stay: those are legitimate context.
+        """
+        path, name = split_unit(unit)
+        files = {}
+        for rel, text in ctx.files.items():
+            if rel != path:
+                files[rel] = text
+                continue
+            try:
+                preamble, order, defs = parse_module(text)
+            except SyntaxError:
+                files[rel] = text
+                continue
+            defs.pop(name, None)
+            files[rel] = render_module(preamble, [n for n in order if n != name], defs)
+        return Context(intent=ctx.intent, prompt=ctx.prompt, files=files,
+                       messages=list(ctx.messages), model=ctx.model, params=dict(ctx.params))
+
+    def rebuild(self, realize, apply: bool = False) -> "RebuildResult":
+        """Regenerate every tracked definition from its intent and check it against the pin.
+
+        `main.json` is the lockfile: it holds each unit's pinned realization. `realize(unit,
+        context, contracts) -> source` regenerates one definition from intent alone. Each
+        result is compared *by normalized hash*, so a stylistic variant counts as identical --
+        matching hashes mean we regenerated **the** program, not merely *a* program. Units
+        whose regeneration differs but whose contracts still pass are the residual decisions
+        an intent underdetermines (DESIGN.md s.0); they are reported, never hidden.
+
+        `apply=True` restores the working tree from the **pinned** realization, not from the
+        regenerated source -- the lockfile stays authoritative, exactly as `npm ci` restores
+        from the lock rather than re-resolving. The regeneration is the verification.
+        """
+        main = self.load_main()
+        base_files = main["files"]
+        contracts = [tuple(c) for c in main["contracts"]]
+        log = self._load_log()
+
+        res = RebuildResult()
+        for path, name in self.list_units():
+            unit = unit_key(path, name)
+            pinned = base_files[path]["defs"][name]
+            res.pinned[unit] = pinned
+            history = log.history_of(unit)
+            if not history:
+                res.missing.append(unit)
+                continue
+            ctx = load_context(log.store, history[-1].manifest)
+            regenerated = realize(unit, self._context_without(ctx, unit), contracts)
+            res.rebuilt[unit] = regenerated
+            if normalize_hash(regenerated) == normalize_hash(pinned):
+                res.identical.append(unit)
+            else:
+                res.divergent.append(unit)
+
+        codebase = {}
+        for path, st in base_files.items():
+            if st["preamble"].strip():                  # imports are carried, not regenerated
+                codebase[unit_key(path, PREAMBLE)] = st["preamble"].rstrip() + "\n"
+        codebase.update(res.rebuilt)
+        for unit in res.missing:                        # nothing to regenerate from
+            codebase[unit] = res.pinned[unit]
+        res.failures = run_contracts(codebase, contracts)
+
+        if apply:
+            restored = dict(codebase)
+            restored.update({u: res.pinned[u] for u in res.pinned})   # the lock wins
+            new_files = files_from_units(restored, base_files)
+            for path, st in base_files.items():
+                new_files.setdefault(path, st)
+            for path, st in new_files.items():
+                _write(os.path.join(self.root, path),
+                       render_module(st["preamble"], st["order"], st["defs"]))
+        return res
+
     # --- json helpers ---
     def _read_json(self, name):
         with open(os.path.join(self.bdir, name), encoding="utf-8") as f:
@@ -334,6 +420,25 @@ class BraidRepo:
     def _write_json(self, name, data):
         with open(os.path.join(self.bdir, name), "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+
+
+@dataclass
+class RebuildResult:
+    """Three buckets: regenerated to the same meaning, regenerated differently, or unknown."""
+    identical: list = field(default_factory=list)
+    divergent: list = field(default_factory=list)
+    missing: list = field(default_factory=list)      # no recorded intent to rebuild from
+    failures: list = field(default_factory=list)     # contract failures on the rebuilt tree
+    rebuilt: dict = field(default_factory=dict)
+    pinned: dict = field(default_factory=dict)
+
+    @property
+    def exact(self) -> bool:
+        return not self.divergent and not self.missing
+
+    @property
+    def green(self) -> bool:
+        return not self.failures
 
 
 def _label(key: str) -> str:

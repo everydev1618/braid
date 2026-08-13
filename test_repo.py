@@ -180,6 +180,53 @@ def test_abandon_and_diff():
         assert repo.load_sessions() == []
 
 
+# --- the Tier-2 proposer seam -------------------------------------------
+
+def _same_def_sessions(repo, d):
+    """Two sessions that change `area` in incompatible ways -> a same-definition overlap."""
+    a = _write(os.path.join(d, "a.py"), MODULE.replace("return math.pi * r * r",
+                                                       "return math.pi * r * r * 1.0"))
+    b = _write(os.path.join(d, "b.py"), MODULE.replace("return math.pi * r * r",
+                                                       "return 3.141592653589793 * r * r"))
+    repo.submit("a", a, "keep it float", [("area-positive", "assert area(1) > 3")],
+                as_path="geo.py")
+    repo.submit("b", b, "inline pi", [], as_path="geo.py")
+
+
+def test_reconcile_without_a_proposer_escalates_same_def_overlap():
+    with tempfile.TemporaryDirectory() as d:
+        repo, _ = _init_file(d)
+        _same_def_sessions(repo, d)
+        _, admitted, conflicts = repo.reconcile(apply=False)
+        assert len(admitted) == 1 and len(conflicts) == 1, (admitted, conflicts)
+
+
+def test_reconcile_admits_a_contract_passing_proposal():
+    """The Tier-2 seam must be reachable from the repo/CLI layer, not just the engine."""
+    with tempfile.TemporaryDirectory() as d:
+        repo, _ = _init_file(d)
+        _same_def_sessions(repo, d)
+        seen = []
+
+        def proposer(req):
+            seen.append(req.name)
+            return "def area(r):\n    return math.pi * r * r\n"
+
+        res, admitted, conflicts = repo.reconcile(apply=False, proposer=proposer)
+        assert seen == ["geo.py::area"], seen
+        assert len(admitted) == 2 and conflicts == [], (admitted, conflicts)
+        assert res.status["b"][0] == 2, res.status["b"]      # TIER2_MERGED
+
+
+def test_reconcile_rejects_a_proposal_that_breaks_contracts():
+    with tempfile.TemporaryDirectory() as d:
+        repo, _ = _init_file(d)
+        _same_def_sessions(repo, d)
+        res, admitted, conflicts = repo.reconcile(
+            apply=False, proposer=lambda req: "def area(r):\n    return -1\n")
+        assert len(conflicts) == 1, (admitted, conflicts)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

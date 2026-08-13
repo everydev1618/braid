@@ -15,9 +15,18 @@ Instead of versioning text and merging lines, braid:
   the contract gate passes ("the model proposes, the contract disposes");
 - keeps the **generating context** of every change (prompt, files, model) — the thing git
   throws away — deduplicated and keyed by meaning;
-- coordinates contended definitions with a **lease + aging** discipline so no session starves.
+- coordinates contended definitions with a **lease + aging** discipline so no session starves;
+- can **rebuild** every definition from its recorded intent and check the result against the
+  pinned realization hashes — matching hashes mean the intent regenerates *the* program, not
+  merely *a* program.
 
 Pure Python 3, standard library only. Run tests with `python3 test_*.py` (no pytest needed).
+The one exception is `llm.py`, the seam to a real model: it imports the Anthropic SDK lazily,
+so nothing else — including the whole test suite — needs it installed.
+
+See the whole thing in one run: `python3 demo_braid.py` (offline and deterministic), or
+`python3 demo_braid.py --live` to put a real `claude-opus-5` call behind the Tier-2 merge
+proposer and the rebuild realizer.
 
 ## Quick start
 
@@ -34,6 +43,10 @@ braid submit ./agent_b_worktree --id bob --intent "add discount handling"
 # see what would happen, then apply
 braid reconcile
 braid reconcile --apply        # writes the changed files, records provenance
+braid reconcile --apply --propose   # let a model merge same-def overlaps (still contract-gated)
+
+# delete the code and rebuild it from the recorded intent
+rm *.py && braid rebuild --apply
 
 # inspect / manage pending work
 braid diff alice               # preview a pending session vs main (by meaning)
@@ -63,12 +76,28 @@ like `git`.
 | `provenance.py` | content-addressed context chunk store + cell log (requirement 1) |
 | `fairness.py` | livelock simulation + lease/aging fix (DESIGN §5#1) |
 | `live.py` | the unified engine: scheduling + leasing + gating + provenance |
+| `llm.py` | the only seam to a real model: Tier-2 merge proposer + rebuild realizer |
 | `repo.py` / `cli.py` / `braid` | on-disk `.braid/` store, CLI, wrapper |
-| `demo_*.py` | runnable demonstrations of each capability |
+| `demo_braid.py` | the capstone: four beats and an encore |
+| `demo_*.py` | runnable demonstrations of each individual capability |
+
+## Rebuild, and what it does and doesn't prove
+
+`main.json` is a lockfile: it holds each unit's pinned realization. `braid rebuild` regenerates
+every definition from its recorded intent — never from its own pinned source, which the
+`test_realizer_never_sees_the_answer` test enforces — and compares by *normalized* hash. Results
+land in three buckets: same meaning as the pin, different-but-contract-green (the residual
+decisions an intent underdetermines, DESIGN.md §0), or no recorded intent. `--apply` restores
+the working tree from the pin, the way `npm ci` restores from the lock; the regeneration is the
+verification, not the source of the restored bytes.
+
+`--offline` replays the pins instead of calling a model. That exercises the mechanism, not the
+model — the hash comparison only becomes a real test with credentials present.
 
 ## Status
 
-A coherent end-to-end prototype, not a deployable system. All four original goals plus the
-hard concurrency problem have working, tested slices (54 tests, 8 suites). Not yet built:
-flake quarantine, exact incremental test selection, real model wiring, and richer normalization
-(import sorting, statement-level commutativity, cross-file dependency tiers). See DESIGN.md §5.
+A coherent end-to-end prototype, not a deployable system. All four original goals plus the hard
+concurrency problem have working, tested slices (**78 tests, 10 suites**). Not yet built: flake
+quarantine, exact incremental test selection, and richer normalization — import sorting,
+statement-level commutativity, cross-file dependency tiers, and desugaring (`x += 1` and
+`x = x + 1` still hash differently, as do a ternary and its `if`). See DESIGN.md §5.
