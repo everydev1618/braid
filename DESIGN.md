@@ -315,11 +315,20 @@ if it can't. So the first falsifiable prototype of braid is the **normalizer (la
   — §0's residual decisions, reported and contract-checked, never hidden), and missing (no
   recorded intent). `--apply` restores from the pin, not from the regenerated source: the lock
   stays authoritative and the regeneration is the verification.
+- `web.py` + `braid web` — **a browser view of a real `.braid/` store**, zero-dependency
+  (`http.server`, server-rendered HTML, no build step, no JS framework). Four views matching
+  four claims: `main` as a lattice of *definitions* with content hashes rather than a file
+  tree; the reconcile queue drawn as strands landing in main, tier-coloured, with escalations
+  stopping short of the trunk; a cell view showing the intent, model and context behind any
+  definition; and the rebuild hash table. Read-only — reconcile runs as a dry run and rebuild
+  as an offline replay, and the server never writes to the store. The whole thing is
+  `render(repo, path, query) -> (status, content_type, body)`, so every view is tested without
+  opening a socket.
 - `demo_braid.py` — the capstone: the stylistic no-op, eight concurrent agents (7 land
   unattended, one Tier-2 model-merge, one genuine contradiction escalated in English), `blame`
   recovering a prompt from a shipped line, and the teardown/rebuild encore.
 - Tests: normalizer/reconciler/contracts/merge (7 each) + provenance (8) + fairness (5) +
-  live (5) + repo (14) + rebuild (9) + llm (9) = 78 across 10 suites; 7 demos.
+  live (5) + repo (14) + rebuild (9) + llm (9) + web (11) = 89 across 11 suites; 7 demos.
 
 Not yet built (DESIGN.md §5): flake quarantine; exact incremental test selection; richer
 normalization (import sorting, statement commutativity, cross-file dependency tiers, and

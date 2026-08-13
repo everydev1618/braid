@@ -9,6 +9,7 @@
     braid show [<def>]                   print a definition + its content hash
     braid log [<def>]                    provenance history
     braid blame <def>                    who/what produced the current version
+    braid web [--port N]                 browse main, the queue, provenance and rebuild
 
 Run via the `braid` wrapper or `python3 cli.py ...`.
 """
@@ -213,6 +214,11 @@ def cmd_rebuild(args):
         print("\napplied -> working tree restored from the pinned realization.")
 
 
+def cmd_web(args):
+    import web
+    web.serve(_repo(), host=args.host, port=args.port)
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="braid", description="version control for the agentic age")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -247,6 +253,11 @@ def build_parser():
     s.add_argument("--offline", action="store_true",
                    help="replay the pinned realizations instead of calling a model")
     s.set_defaults(fn=cmd_rebuild)
+
+    s = sub.add_parser("web", help="browse this repo at http://127.0.0.1:7420")
+    s.add_argument("--port", type=int, default=7420)
+    s.add_argument("--host", default="127.0.0.1")
+    s.set_defaults(fn=cmd_web)
 
     s = sub.add_parser("show"); s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_show)
     s = sub.add_parser("log"); s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_log)

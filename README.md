@@ -24,6 +24,11 @@ Pure Python 3, standard library only. Run tests with `python3 test_*.py` (no pyt
 The one exception is `llm.py`, the seam to a real model: it imports the Anthropic SDK lazily,
 so nothing else — including the whole test suite — needs it installed.
 
+Want visuals? `braid web` serves a browser view of a real `.braid/` store on localhost —
+main as a lattice of definitions rather than a file tree, the reconcile queue drawn as strands
+landing in main, the intent behind any definition, and the rebuild hash table. Read-only,
+stdlib-only, no build step.
+
 See the whole thing in one run: `python3 demo_braid.py` (offline and deterministic), or
 `python3 demo_braid.py --live` to put a real `claude-opus-5` call behind the Tier-2 merge
 proposer and the rebuild realizer.
@@ -55,6 +60,9 @@ braid status
 braid show checkout            # source + content hash (bare name, or path::name)
 braid blame checkout           # which agent/intent produced it
 braid log                      # provenance history per definition
+
+# or look at all of it in a browser
+braid web                      # http://127.0.0.1:7420
 ```
 
 A session is a set of file edits relative to `main` — a single file (mapped to a tracked path
@@ -77,6 +85,7 @@ like `git`.
 | `fairness.py` | livelock simulation + lease/aging fix (DESIGN §5#1) |
 | `live.py` | the unified engine: scheduling + leasing + gating + provenance |
 | `llm.py` | the only seam to a real model: Tier-2 merge proposer + rebuild realizer |
+| `web.py` | `braid web`: a browser view of a real `.braid/` store, stdlib http.server |
 | `repo.py` / `cli.py` / `braid` | on-disk `.braid/` store, CLI, wrapper |
 | `demo_braid.py` | the capstone: four beats and an encore |
 | `demo_*.py` | runnable demonstrations of each individual capability |
@@ -97,7 +106,7 @@ model — the hash comparison only becomes a real test with credentials present.
 ## Status
 
 A coherent end-to-end prototype, not a deployable system. All four original goals plus the hard
-concurrency problem have working, tested slices (**78 tests, 10 suites**). Not yet built: flake
+concurrency problem have working, tested slices (**89 tests, 11 suites**). Not yet built: flake
 quarantine, exact incremental test selection, and richer normalization — import sorting,
 statement-level commutativity, cross-file dependency tiers, and desugaring (`x += 1` and
 `x = x + 1` still hash differently, as do a ternary and its `if`). See DESIGN.md §5.
