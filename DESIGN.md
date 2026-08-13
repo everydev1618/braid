@@ -1,6 +1,6 @@
 # braid — a version control system for the agentic age
 
-> Concurrent agent sessions, woven into one green main. (Earlier working name: antigit.)
+> Concurrent agent sessions, woven into one green main.
 
 ## 0. Thesis
 
