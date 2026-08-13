@@ -1,5 +1,6 @@
 """cli.py -- the `braid` command line.
 
+    braid                                orient: where you are and what to type next
     braid init <file.py|file.go>         start tracking a Python or Go module
     braid status                         show main, contracts, pending sessions
     braid submit <file> --id <id> --intent "..." [--contract "assert ..."]...
@@ -16,6 +17,7 @@ Run via the `braid` wrapper or `python3 cli.py ...`.
 
 import argparse
 import difflib
+import os
 import sys
 
 import llm
@@ -219,16 +221,120 @@ def cmd_web(args):
     web.serve(_repo(), host=args.host, port=args.port)
 
 
-def build_parser():
-    p = argparse.ArgumentParser(prog="braid", description="version control for the agentic age")
-    sub = p.add_subparsers(dest="cmd", required=True)
+def cmd_help(args):
+    print(overview())
 
-    s = sub.add_parser("init", help="track a .py/.go file or a directory of them")
+
+# --- the front door --------------------------------------------------------
+#
+# Typing the name of a program is a question ("what are you? what now?"), not a syntax
+# error. argparse's instinct is to answer it with `error: the following arguments are
+# required: cmd`, which is a reprimand for a reasonable act. So a bare `braid` gets an
+# orientation instead, written against the state of the directory the user is standing in.
+
+def _summary():
+    """(lines, hints) describing the repo here, or None if there isn't one."""
+    try:
+        repo = BraidRepo.find(".")
+        main = repo.load_main()
+    except BraidError:
+        return None
+
+    units = repo.list_units()
+    sessions = repo.load_sessions()
+    files = main["files"]
+    lines = [
+        f"  repo       {repo.root}  ({main['lang']})",
+        f"  main       {len(units)} definition(s) across {len(files)} file(s): "
+        f"{', '.join(sorted(files))}",
+        f"  contracts  {len(main['contracts'])} (the spec ceiling agents cannot weaken)",
+    ]
+    if sessions:
+        who = ", ".join(s["id"] for s in sessions)
+        lines.append(f"  pending    {len(sessions)} session(s) waiting to land: {who}")
+    else:
+        lines.append("  pending    nothing waiting to land")
+
+    hints = [
+        ("braid status", "tracked files, the spec ceiling, pending sessions"),
+        ("braid show", "a definition and its content hash (`braid show <name>`)"),
+        ("braid submit <path> --id <agent> --intent \"...\"", "queue an agent's edit"),
+        ("braid reconcile", "what would land; add --apply to write it"),
+        ("braid blame <name>", "the agent, intent and model behind a definition"),
+        ("braid web", "browse main, the queue and provenance in a browser"),
+    ]
+    if sessions:
+        hints.insert(0, ("braid diff " + sessions[0]["id"], "preview that session against main"))
+    return lines, hints
+
+
+def overview() -> str:
+    """What a bare `braid` prints: where you are, and the next useful thing to type."""
+    out = ["braid -- version control for the agentic age", ""]
+    found = _summary()
+    if found is None:
+        out += [
+            f"  no braid repo here ({os.path.abspath('.')})",
+            "",
+            "  start tracking code:",
+            "    braid init .              every .py or .go file in this directory",
+            "    braid init main.go        a single file",
+            "",
+            "  braid versions definitions by meaning rather than files by bytes, so an agent",
+            "  that only reformats your code is a no-op instead of a merge conflict.",
+        ]
+    else:
+        lines, hints = found
+        out += lines + ["", "  what you can do:"]
+        width = max(len(cmd) for cmd, _ in hints)
+        out += [f"    {cmd:<{width}}  {why}" for cmd, why in hints]
+    out += ["", "  `braid <command> --help` for a command's options; "
+            "`braid help` for this screen."]
+    return "\n".join(out)
+
+
+class _Parser(argparse.ArgumentParser):
+    """An argparse parser that suggests instead of only scolding."""
+
+    def __init__(self, *a, example=None, **kw):
+        self.example = example
+        super().__init__(*a, **kw)
+
+    def error(self, message):
+        print(f"{self.prog}: {message}", file=sys.stderr)
+        if self.example:
+            print(f"\ntry:  {self.example}", file=sys.stderr)
+        print(f"\n`{self.prog} --help` lists every option.", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def unknown_command(name: str) -> int:
+    """A mistyped command should point at the real one, not just fail."""
+    names = sorted(COMMANDS)
+    near = difflib.get_close_matches(name, names, n=2, cutoff=0.5)
+    print(f"braid: '{name}' is not a braid command.", file=sys.stderr)
+    if near:
+        print(f"\ndid you mean:  {'  or  '.join('braid ' + n for n in near)}", file=sys.stderr)
+    print(f"\nbraid commands: {', '.join(names)}", file=sys.stderr)
+    print("run `braid` on its own to get oriented.", file=sys.stderr)
+    return 2
+
+
+def build_parser():
+    p = _Parser(prog="braid", description="version control for the agentic age",
+                epilog="run `braid` with no arguments to get oriented.")
+    sub = p.add_subparsers(dest="cmd", parser_class=_Parser)
+
+    s = sub.add_parser("init", help="track a .py/.go file or a directory of them",
+                       example="braid init .")
     s.add_argument("path")
     s.set_defaults(fn=cmd_init)
-    sub.add_parser("status").set_defaults(fn=cmd_status)
+    sub.add_parser("status", help="tracked files, contracts, pending sessions") \
+       .set_defaults(fn=cmd_status)
+    sub.add_parser("help", help="what a bare `braid` prints").set_defaults(fn=cmd_help)
 
-    s = sub.add_parser("submit", help="submit an edited file or directory as a session")
+    s = sub.add_parser("submit", help="submit an edited file or directory as a session",
+                       example='braid submit main.go --id alice --intent "make it idempotent"')
     s.add_argument("path")
     s.add_argument("--id", required=True)
     s.add_argument("--intent", default="")
@@ -237,12 +343,16 @@ def build_parser():
     s.add_argument("--model", default="unknown")
     s.set_defaults(fn=cmd_submit)
 
-    sub.add_parser("sessions").set_defaults(fn=cmd_sessions)
+    sub.add_parser("sessions", help="list pending sessions").set_defaults(fn=cmd_sessions)
 
-    s = sub.add_parser("abandon"); s.add_argument("id"); s.set_defaults(fn=cmd_abandon)
-    s = sub.add_parser("diff"); s.add_argument("id"); s.set_defaults(fn=cmd_diff)
+    s = sub.add_parser("abandon", help="drop a pending or escalated session",
+                       example="braid abandon alice")
+    s.add_argument("id"); s.set_defaults(fn=cmd_abandon)
+    s = sub.add_parser("diff", help="preview a pending session against main",
+                       example="braid diff alice")
+    s.add_argument("id"); s.set_defaults(fn=cmd_diff)
 
-    s = sub.add_parser("reconcile")
+    s = sub.add_parser("reconcile", help="fold pending sessions into main")
     s.add_argument("--apply", action="store_true", help="write main and record provenance")
     s.add_argument("--propose", action="store_true",
                    help="let a model propose Tier-2 merges (still contract-gated)")
@@ -259,20 +369,43 @@ def build_parser():
     s.add_argument("--host", default="127.0.0.1")
     s.set_defaults(fn=cmd_web)
 
-    s = sub.add_parser("show"); s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_show)
-    s = sub.add_parser("log"); s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_log)
-    s = sub.add_parser("blame"); s.add_argument("name"); s.set_defaults(fn=cmd_blame)
+    s = sub.add_parser("show", help="print a definition and its content hash")
+    s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_show)
+    s = sub.add_parser("log", help="provenance history per definition")
+    s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_log)
+    s = sub.add_parser("blame", help="who and what produced a definition",
+                       example="braid blame greeting")
+    s.add_argument("name"); s.set_defaults(fn=cmd_blame)
     return p
 
 
+COMMANDS = ("init", "status", "help", "submit", "sessions", "abandon", "diff",
+            "reconcile", "rebuild", "web", "show", "log", "blame")
+
+
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    if not argv:                                    # `braid` on its own: orient, don't scold
+        print(overview())
+        return 0
+    if argv[0] not in COMMANDS and not argv[0].startswith("-"):
+        return unknown_command(argv[0])
+
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as e:                          # --help (0) or a usage error (2)
+        return int(e.code or 0)
+
     try:
         args.fn(args)
         return 0
     except BraidError as e:
         print(f"braid: {e}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("\nbraid: interrupted; nothing was written.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

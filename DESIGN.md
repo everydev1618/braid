@@ -345,6 +345,13 @@ if it can't. So the first falsifiable prototype of braid is the **normalizer (la
   parser in the Python stdlib and renaming without a scope analysis is exactly the kind of
   unproven rewrite the coward rule forbids. A repo tracks one language; mixed trees are
   refused at `init`.
+- `cli.py`'s front door — **a bare `braid` orients instead of scolding**. argparse's instinct
+  is to answer `braid` with `error: the following arguments are required: cmd`, which treats
+  asking "what are you?" as a syntax error. Now it prints where you are (repo, language, unit
+  and contract counts, who is waiting to land) and the next useful thing to type — or, outside
+  a repo, how to make one. A mistyped command suggests the nearest real one, a forgotten flag
+  prints a command that would have worked, and exit codes still mean what shells expect
+  (0 for help given, 2 for usage, 1 for a braid error, 130 for interrupt).
 - `llm.py` — **the real-model seam**, and the only file in braid that talks to a network. The
   Anthropic SDK is imported lazily inside `make_call_model`, so the rest of braid and the whole
   test suite stay standard-library-only and offline (`test_importing_llm_does_not_import_the_sdk`
@@ -375,7 +382,7 @@ if it can't. So the first falsifiable prototype of braid is the **normalizer (la
   recovering a prompt from a shipped line, and the teardown/rebuild encore.
 - Tests: normalizer/reconciler/contracts/merge (7 each) + provenance (8) + fairness (5) +
   live (5) + repo (14) + rebuild (9) + llm (9) + web (11) + normalizer_go (17) +
-  contracts_go (7) + repo_go (11) = 124 across 14 suites; 7 demos. The Go suites skip
+  contracts_go (7) + repo_go (11) + cli (11) = 135 across 15 suites; 7 demos. The Go suites skip
   themselves when `go` is not on PATH, so the suite stays runnable on a Python-only machine.
 
 Not yet built (DESIGN.md §5): flake quarantine; exact incremental test selection; richer

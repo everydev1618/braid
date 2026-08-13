@@ -46,6 +46,9 @@ proposer and the rebuild realizer.
 ## Quick start
 
 ```sh
+# lost? `braid` on its own tells you where you are and what to type next
+braid
+
 # track a single module, or a whole directory of .py (or .go) files
 braid init mymodule.py        # or:  braid init .   (run commands from inside the tracked dir)
 braid init main.go            # a Go repo: units are func/type/var/const, gated by `go test`
@@ -120,7 +123,7 @@ model — the hash comparison only becomes a real test with credentials present.
 ## Status
 
 A coherent end-to-end prototype, not a deployable system. All four original goals plus the hard
-concurrency problem have working, tested slices (**124 tests, 14 suites**). Not yet built: flake
+concurrency problem have working, tested slices (**135 tests, 15 suites**). Not yet built: flake
 quarantine, exact incremental test selection, and richer normalization — import sorting,
 statement-level commutativity, cross-file dependency tiers, and desugaring (`x += 1` and
 `x = x + 1` still hash differently, as do a ternary and its `if`). The Go frontend is layer 0
