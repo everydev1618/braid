@@ -1,8 +1,8 @@
 """cli.py -- the `braid` command line.
 
-    braid init <file.py>                 start tracking a Python module
+    braid init <file.py|file.go>         start tracking a Python or Go module
     braid status                         show main, contracts, pending sessions
-    braid submit <file.py> --id <id> --intent "..." [--contract "assert ..."]...
+    braid submit <file> --id <id> --intent "..." [--contract "assert ..."]...
     braid sessions                       list pending sessions
     braid reconcile [--apply] [--propose]  fold sessions into main (dry-run unless --apply)
     braid rebuild [--apply] [--offline]  regenerate every def from intent, check against the pins
@@ -19,7 +19,7 @@ import difflib
 import sys
 
 import llm
-from normalizer import normalize_hash
+import lang
 from repo import BraidError, BraidRepo
 
 TIER = {0: "Tier0 disjoint", 1: "Tier1 dep-coupled", 2: "Tier2 model-merged", 3: "Tier3 ESCALATED"}
@@ -34,7 +34,7 @@ def cmd_init(args):
     main = repo.load_main()
     ndefs = sum(len(st["order"]) for st in main["files"].values())
     print(f"initialized braid repo at {repo.bdir}")
-    print(f"tracking {len(main['files'])} file(s), {ndefs} definitions:")
+    print(f"tracking {len(main['files'])} {main['lang']} file(s), {ndefs} definitions:")
     for path, st in sorted(main["files"].items()):
         print(f"  {path}: {', '.join(st['order']) or '(no defs)'}")
 
@@ -42,7 +42,7 @@ def cmd_init(args):
 def cmd_status(args):
     repo = _repo()
     main = repo.load_main()
-    print(f"tracking {len(main['files'])} file(s):")
+    print(f"tracking {len(main['files'])} {main['lang']} file(s):")
     for path, st in sorted(main["files"].items()):
         print(f"  {path}: {', '.join(st['order']) or '(no defs)'}")
     print(f"contracts (spec ceiling): {len(main['contracts'])}")
@@ -128,14 +128,14 @@ def cmd_show(args):
     repo = _repo()
     if args.name:
         unit, src = repo.source_of(args.name)
-        print(f"# {unit}  [{normalize_hash(src)[:12]}]")
+        print(f"# {unit}  [{lang.normalize_hash(unit, src)[:12]}]")
         print(src.rstrip() + "\n")
         return
     main = repo.load_main()
     for path, st in sorted(main["files"].items()):
         for name in st["order"]:
             src = st["defs"][name]
-            print(f"# {path}::{name}  [{normalize_hash(src)[:12]}]")
+            print(f"# {path}::{name}  [{lang.normalize_hash(f'{path}::{name}', src)[:12]}]")
             print(src.rstrip() + "\n")
 
 
@@ -188,8 +188,8 @@ def cmd_rebuild(args):
     for unit in res.identical:
         print(f"  [=] {unit:<28} same meaning as the pin")
     for unit in res.divergent:
-        print(f"  [~] {unit:<28} {normalize_hash(res.pinned[unit])[:12]} -> "
-              f"{normalize_hash(res.rebuilt[unit])[:12]}")
+        print(f"  [~] {unit:<28} {lang.normalize_hash(unit, res.pinned[unit])[:12]} -> "
+              f"{lang.normalize_hash(unit, res.rebuilt[unit])[:12]}")
     for unit in res.missing:
         print(f"  [?] {unit:<28} no recorded intent (from base, or never reconciled)")
 
@@ -223,7 +223,7 @@ def build_parser():
     p = argparse.ArgumentParser(prog="braid", description="version control for the agentic age")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init", help="track a .py file or a directory of them")
+    s = sub.add_parser("init", help="track a .py/.go file or a directory of them")
     s.add_argument("path")
     s.set_defaults(fn=cmd_init)
     sub.add_parser("status").set_defaults(fn=cmd_status)

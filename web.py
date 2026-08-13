@@ -22,7 +22,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import llm
-from normalizer import normalize_hash
+import lang
 from repo import BraidError, BraidRepo, PREAMBLE, SEP, split_unit, unit_key
 
 TIERS = {
@@ -238,7 +238,7 @@ def view_main(repo: BraidRepo, green: bool, counts: dict, main: dict) -> str:
                 f'<a class="cell" href="/unit/{urllib.parse.quote(unit)}" '
                 f'style="--strand:{_agent_color(agent)}">'
                 f'<div class="nm">{e(name)}</div>'
-                f'<div class="hash">{e(normalize_hash(src)[:16])}</div>'
+                f'<div class="hash">{e(lang.normalize_hash(unit, src)[:16])}</div>'
                 f'<div class="by">{by}</div></a>')
         out.append("</div>")
     if main["contracts"]:
@@ -379,7 +379,7 @@ def view_unit(repo: BraidRepo, unit: str, green: bool, counts: dict, main: dict)
     if not st or name not in st.get("defs", {}):
         return None
     src = st["defs"][name]
-    h = normalize_hash(src)
+    h = lang.normalize_hash(unit, src)
     log = repo._load_log()
     hist = log.history_of(unit)
     cell = hist[-1] if hist else None
@@ -436,8 +436,8 @@ def view_rebuild(repo: BraidRepo, green: bool, counts: dict, main: dict) -> str:
                "unk": ("no recorded intent", "&#9675;")}
     for unit, kind in order:
         label, glyph = verdict[kind]
-        pin = normalize_hash(res.pinned[unit])[:12]
-        new = normalize_hash(res.rebuilt[unit])[:12] if unit in res.rebuilt else "&mdash;"
+        pin = lang.normalize_hash(unit, res.pinned[unit])[:12]
+        new = lang.normalize_hash(unit, res.rebuilt[unit])[:12] if unit in res.rebuilt else "&mdash;"
         out.append(f'<tr><td class="mark {kind}">{glyph}</td>'
                    f'<td class="mono">{e(unit)}</td>'
                    f'<td class="mono"><span class="h">{pin}</span></td>'

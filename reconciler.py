@@ -28,9 +28,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from contracts import run_contracts
+from lang import free_names, normalize_hash, run_contracts
 from merge import MergeRequest
-from normalizer import free_names, normalize_hash
 
 TIER0_DISJOINT = 0    # disjoint, no dependency edge -> auto-merge
 TIER1_DEP = 1         # disjoint but dependency-coupled -> auto-merge + flag
@@ -54,12 +53,12 @@ class ReconcileResult:
 
 
 def _hashes(cb: Codebase) -> dict:
-    return {name: normalize_hash(src) for name, src in cb.items()}
+    return {name: normalize_hash(name, src) for name, src in cb.items()}
 
 
 def _deps(cb: Codebase) -> dict:
     names = set(cb)
-    return {name: free_names(src) & names for name, src in cb.items()}
+    return {name: free_names(name, src) & names for name, src in cb.items()}
 
 
 def changeset(base: Codebase, variant: Codebase) -> Change:
@@ -137,7 +136,7 @@ def _commit(state: IntegrationState, change: Change, new_current: Codebase, cont
     state.acc_touched |= change.touched
     for n in change.touched:
         src = new_current.get(n)
-        state.acc_hash[n] = normalize_hash(src) if src is not None else None
+        state.acc_hash[n] = normalize_hash(n, src) if src is not None else None
     state.acc_contracts = contracts
 
 

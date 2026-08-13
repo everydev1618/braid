@@ -242,6 +242,58 @@ def normalize_hash(src: str) -> str:
     return normalize(src).hash
 
 
+# --- the structural half of the frontend: a module <-> its top-level units ---
+#
+# Splitting is per-language, like hashing: each top-level def (function/class) is a unit of
+# `main`, and the rest of the file's top level (imports, constants) is that file's preamble.
+# `lang.py` binds these to `.py`; `normalizer_go.py` has the same four functions for `.go`.
+
+_DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _segment(text: str, node: ast.AST) -> str:
+    lines = text.splitlines()
+    start = node.lineno
+    for d in getattr(node, "decorator_list", []) or []:
+        start = min(start, d.lineno)
+    return "\n".join(lines[start - 1:node.end_lineno])
+
+
+def parse_module(text: str):
+    """Return (preamble, order, defs) for one module's top level."""
+    tree = ast.parse(text)
+    preamble_parts, order, defs = [], [], {}
+    for node in tree.body:
+        if isinstance(node, _DEF_NODES):
+            defs[node.name] = _segment(text, node).rstrip() + "\n"
+            order.append(node.name)
+        else:
+            seg = _segment(text, node)
+            if seg.strip():
+                preamble_parts.append(seg.rstrip())
+    return "\n".join(preamble_parts), order, defs
+
+
+def render_module(preamble: str, order: list, defs: dict) -> str:
+    parts = []
+    if preamble.strip():
+        parts.append(preamble.rstrip())
+    seen = set()
+    for name in order:
+        if name in defs:
+            parts.append(defs[name].rstrip())
+            seen.add(name)
+    for name in defs:
+        if name not in seen:
+            parts.append(defs[name].rstrip())
+    return "\n\n\n".join(parts) + "\n"
+
+
+def file_state(text: str) -> dict:
+    preamble, order, defs = parse_module(text)
+    return {"preamble": preamble, "order": order, "defs": defs}
+
+
 # --- layer 3 building block: free (external) names of a definition ---
 #
 # A name referenced (Load) that does not resolve to any enclosing binding is "free":

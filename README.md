@@ -20,9 +20,19 @@ Instead of versioning text and merging lines, braid:
   pinned realization hashes — matching hashes mean the intent regenerates *the* program, not
   merely *a* program.
 
-Pure Python 3, standard library only. Run tests with `python3 test_*.py` (no pytest needed).
-The one exception is `llm.py`, the seam to a real model: it imports the Anthropic SDK lazily,
-so nothing else — including the whole test suite — needs it installed.
+braid tracks **Python or Go**. The engine never mentions a language; a frontend is five
+functions registered per file extension in `lang.py`, so `braid init main.go` works the same
+way `braid init mymodule.py` does. The two differ in depth, deliberately: Python gets layers 0
+and 2 (stdlib `ast` plus a real scope analysis, so local renames are free), Go gets layer 0
+(a canonical token stream — comments, formatting and redundant semicolons fold to one hash,
+but there is no α-renaming without a parser). Contracts are gated by `exec` for Python and by
+`go build` + `go test` for Go, so a Go repo needs `go` on PATH. One repo tracks one language.
+
+Pure Python 3, standard library only. Run tests with `python3 test_*.py` (no pytest needed);
+the Go suites skip themselves when `go` is absent. Two exceptions to "no dependencies":
+`llm.py`, the seam to a real model, imports the Anthropic SDK lazily, so nothing else —
+including the whole test suite — needs it installed; and `contracts_go.py` shells out to the
+Go toolchain, which is the only way to know Go code compiles.
 
 Want visuals? `braid web` serves a browser view of a real `.braid/` store on localhost —
 main as a lattice of definitions rather than a file tree, the reconcile queue drawn as strands
@@ -36,8 +46,9 @@ proposer and the rebuild realizer.
 ## Quick start
 
 ```sh
-# track a single module, or a whole directory of .py files
+# track a single module, or a whole directory of .py (or .go) files
 braid init mymodule.py        # or:  braid init .   (run commands from inside the tracked dir)
+braid init main.go            # a Go repo: units are func/type/var/const, gated by `go test`
 
 # agents submit edits: a single file (mapped with --as), or a whole edited copy of the tree
 braid submit agent_a.py --id alice --as checkout.py \
@@ -77,9 +88,12 @@ like `git`.
 
 | file | what |
 |---|---|
-| `normalizer.py` | "semantic gofmt": canonical content hashing + free-name (dependency) analysis |
+| `normalizer.py` | "semantic gofmt" for Python: canonical content hashing + free-name (dependency) analysis + the module↔units split |
+| `normalizer_go.py` | the same four functions for Go, layer 0: a Go lexer, ASI, brace-aware decl splitting |
+| `lang.py` | the language registry: which frontend owns a file, a unit, or a codebase |
 | `reconciler.py` | commutativity classifier + contract-gated `integrate`/`reconcile` (Tiers 0–3) |
-| `contracts.py` | materialize a composed codebase and run executable contracts |
+| `contracts.py` | materialize a composed codebase and run executable contracts (Python) |
+| `contracts_go.py` | the Go gate: write a scratch module, `go build`, run each contract as a test |
 | `merge.py` | the Tier-2 model-proposer seam (`make_llm_proposer` plugs in a real model) |
 | `provenance.py` | content-addressed context chunk store + cell log (requirement 1) |
 | `fairness.py` | livelock simulation + lease/aging fix (DESIGN §5#1) |
@@ -106,7 +120,9 @@ model — the hash comparison only becomes a real test with credentials present.
 ## Status
 
 A coherent end-to-end prototype, not a deployable system. All four original goals plus the hard
-concurrency problem have working, tested slices (**89 tests, 11 suites**). Not yet built: flake
+concurrency problem have working, tested slices (**124 tests, 14 suites**). Not yet built: flake
 quarantine, exact incremental test selection, and richer normalization — import sorting,
 statement-level commutativity, cross-file dependency tiers, and desugaring (`x += 1` and
-`x = x + 1` still hash differently, as do a ternary and its `if`). See DESIGN.md §5.
+`x = x + 1` still hash differently, as do a ternary and its `if`). The Go frontend is layer 0
+only: no α-renaming, so Go definitions differing solely in a local variable name hash
+differently. See DESIGN.md §3 and §5.

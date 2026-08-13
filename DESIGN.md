@@ -145,6 +145,42 @@ operations with a decidability cliff.**
 
 No cross-language identity in v1 (different semantics → a layer-5 problem in disguise).
 
+### Language frontends
+
+Everything above the frontend — units keyed by meaning, the tiered classifier, contract
+gating, provenance, rebuild — is language-agnostic. What is language-specific is exactly five
+functions, registered per file extension in `lang.py`:
+
+| | `.py` (`normalizer.py`, `contracts.py`) | `.go` (`normalizer_go.py`, `contracts_go.py`) |
+|---|---|---|
+| `normalize` | layers 0 **and 2**: stdlib `ast` + a real scope analysis | layer 0 only: a canonical token stream |
+| `free_names` | scope-accurate | over-approximated (locals included) |
+| `parse_module` / `render_module` | top-level `def`/`class`, `ast`-accurate spans | top-level `func`/`type`/`var`/`const`, brace-aware |
+| `run_contracts` | `exec` into a namespace | write a scratch module, `go build` + `go test` |
+
+The asymmetry is the point of the coward rule, not an oversight. Python gets α-renaming
+because the stdlib hands us a parse tree and Python's scope rules are small enough to
+re-implement honestly. Go has no parser in the Python stdlib, so its frontend lexes rather
+than parses: comments, whitespace, line breaks and redundant semicolons fold (including
+Go's automatic semicolon insertion, applied and then minimized, so `a := 1; b := 2` and the
+same two statements on two lines are one hash) — but two definitions differing only in a
+local variable name hash differently, where their Python equivalents would not. A Go layer 2
+needs a real scope analysis, which needs a real parser.
+
+Two consequences worth stating plainly:
+
+- **Over-approximating free names is the safe direction.** An extra dependency edge only ever
+  demotes an auto-merge from Tier 0 (disjoint) to Tier 1 (dependency-coupled); both are
+  admitted. Missing an edge would let genuinely coupled changes look independent, which is
+  the failure that matters.
+- **A gate that cannot run reports red.** The Go contract runner needs `go` on PATH; without
+  it, it returns a `<toolchain>` failure rather than a green. An unverifiable merge is not an
+  admissible one.
+
+**One repo, one language.** A mixed tree is refused at `braid init`. Contracts are written in
+*a* language, and with units from two frontends in one codebase there is no sound way to
+decide which gate should run them.
+
 ## 4. The reconciler — the engine
 
 ### Master concept: auto-merge iff commute
@@ -298,7 +334,17 @@ if it can't. So the first falsifiable prototype of braid is the **normalizer (la
   or a whole edited tree); reconcile splits merged units back per file and writes each changed
   file, records who/what produced each def, and keeps `main` green; conflicts stay pending.
   See `README.md`. (Cross-file dependency *tiers* degrade to Tier-0 — `free_names` returns real
-  names, not `path::name` — cosmetic, since both auto-merge.)
+  names, not `path::name` — cosmetic, since both auto-merge. Same in both frontends.)
+- `lang.py` + `normalizer_go.py` + `contracts_go.py` — **braid is not Python-only**. The engine
+  never mentions a language; five functions per extension do (§3 "Language frontends"), so
+  `braid init main.go` tracks Go the same way it tracks Python: `func`/`type`/`var`/`const`
+  become units, the `package` clause and imports become the preamble, a reformatted and
+  re-commented file is still a *no-op*, and the gate is `go build` + `go test` instead of
+  `exec`. Go normalization is layer 0 only (a canonical token stream with Go's automatic
+  semicolon insertion applied and then minimized) — no α-renaming, because there is no Go
+  parser in the Python stdlib and renaming without a scope analysis is exactly the kind of
+  unproven rewrite the coward rule forbids. A repo tracks one language; mixed trees are
+  refused at `init`.
 - `llm.py` — **the real-model seam**, and the only file in braid that talks to a network. The
   Anthropic SDK is imported lazily inside `make_call_model`, so the rest of braid and the whole
   test suite stay standard-library-only and offline (`test_importing_llm_does_not_import_the_sdk`
@@ -328,7 +374,9 @@ if it can't. So the first falsifiable prototype of braid is the **normalizer (la
   unattended, one Tier-2 model-merge, one genuine contradiction escalated in English), `blame`
   recovering a prompt from a shipped line, and the teardown/rebuild encore.
 - Tests: normalizer/reconciler/contracts/merge (7 each) + provenance (8) + fairness (5) +
-  live (5) + repo (14) + rebuild (9) + llm (9) + web (11) = 89 across 11 suites; 7 demos.
+  live (5) + repo (14) + rebuild (9) + llm (9) + web (11) + normalizer_go (17) +
+  contracts_go (7) + repo_go (11) = 124 across 14 suites; 7 demos. The Go suites skip
+  themselves when `go` is not on PATH, so the suite stays runnable on a Python-only machine.
 
 Not yet built (DESIGN.md §5): flake quarantine; exact incremental test selection; richer
 normalization (import sorting, statement commutativity, cross-file dependency tiers, and

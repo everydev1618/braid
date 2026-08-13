@@ -18,7 +18,7 @@ import hashlib
 import os
 from dataclasses import asdict, dataclass, field
 
-from normalizer import normalize_hash
+import lang
 
 
 def _hash(content: str) -> str:
@@ -140,7 +140,7 @@ class CellLog:
         self._seq = 0
 
     def record(self, def_name: str, source: str, context: Context, agent: str) -> Cell:
-        rh = normalize_hash(source)
+        rh = lang.normalize_hash(def_name, source)
         prior = self._by_def.get(def_name)
         parent_hash = prior[-1].realization_hash if prior else None
         manifest = store_context(self.store, context)

@@ -1,15 +1,17 @@
-"""repo.py -- braid as a usable thing: a `.braid/` store over a tree of Python files.
+"""repo.py -- braid as a usable thing: a `.braid/` store over a tree of source files.
 
-A braid repo tracks one or more Python modules. Each top-level def (function/class) is a unit
-of `main`, keyed globally by `path::name` so the same name can live in different files; the rest
-of each file's top level (imports, constants) is kept verbatim as that file's preamble. Agents
-submit edits (a single file, or a whole edited copy of the tree); `reconcile` folds them into
-main through the real engine, records provenance, and writes each changed file back.
+A braid repo tracks one or more modules in a single language (Python or Go -- see `lang.py`).
+Each top-level definition is a unit of `main`, keyed globally by `path::name` so the same name
+can live in different files; the rest of each file's top level (package clause, imports,
+constants) is kept verbatim as that file's preamble. Agents submit edits (a single file, or a
+whole edited copy of the tree); `reconcile` folds them into main through the real engine,
+records provenance, and writes each changed file back.
 
 On-disk layout (under the repo root):
     .braid/
       config.json     {"files": [<relpath>, ...]}
-      main.json       {"files": {relpath: {preamble, order, defs}}, "contracts": [...]}
+      main.json       {"lang": "python"|"go",
+                       "files": {relpath: {preamble, order, defs}}, "contracts": [...]}
       cells.json      provenance cells (chunks live in objects/)
       objects/<hash>  content-addressed context chunks
       sessions/<id>.json  pending edits (per-file)
@@ -17,17 +19,15 @@ On-disk layout (under the repo root):
 
 from __future__ import annotations
 
-import ast
 import json
 import os
 from dataclasses import dataclass, field
 
-from contracts import run_contracts
-from normalizer import normalize_hash
+import lang
+from lang import run_contracts
 from provenance import CellLog, Context, ContextStore, load_context
 from reconciler import changeset, reconcile as reconcile_batch
 
-_DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 PREAMBLE = "__preamble__"
 SEP = "::"
 
@@ -41,49 +41,19 @@ def split_unit(key: str):
     return path, name
 
 
-# --- file <-> defs ---------------------------------------------------------
+# --- file <-> defs (dispatched to the language frontend by path) -----------
 
-def _segment(text: str, node: ast.AST) -> str:
-    lines = text.splitlines()
-    start = node.lineno
-    for d in getattr(node, "decorator_list", []) or []:
-        start = min(start, d.lineno)
-    return "\n".join(lines[start - 1:node.end_lineno])
-
-
-def parse_module(text: str):
+def parse_module(text: str, path: str | None = None):
     """Return (preamble, order, defs) for one module's top level."""
-    tree = ast.parse(text)
-    preamble_parts, order, defs = [], [], {}
-    for node in tree.body:
-        if isinstance(node, _DEF_NODES):
-            defs[node.name] = _segment(text, node).rstrip() + "\n"
-            order.append(node.name)
-        else:
-            seg = _segment(text, node)
-            if seg.strip():
-                preamble_parts.append(seg.rstrip())
-    return "\n".join(preamble_parts), order, defs
+    return lang.for_path(path).parse_module(text)
 
 
-def render_module(preamble: str, order: list, defs: dict) -> str:
-    parts = []
-    if preamble.strip():
-        parts.append(preamble.rstrip())
-    seen = set()
-    for name in order:
-        if name in defs:
-            parts.append(defs[name].rstrip())
-            seen.add(name)
-    for name in defs:
-        if name not in seen:
-            parts.append(defs[name].rstrip())
-    return "\n\n\n".join(parts) + "\n"
+def render_module(preamble: str, order: list, defs: dict, path: str | None = None) -> str:
+    return lang.for_path(path).render_module(preamble, order, defs)
 
 
-def file_state(text: str) -> dict:
-    preamble, order, defs = parse_module(text)
-    return {"preamble": preamble, "order": order, "defs": defs}
+def file_state(text: str, path: str | None = None) -> dict:
+    return lang.for_path(path).file_state(text)
 
 
 # --- files <-> units (the reconciler's codebase view) ----------------------
@@ -143,14 +113,20 @@ class BraidRepo:
         path = os.path.abspath(path)
         if os.path.isdir(path):
             root = path
-            rels = _discover_py(root)
+            rels = _discover_src(root)
             if not rels:
-                raise BraidError(f"no .py files found under {path}")
+                kinds = ", ".join(sorted(lang.EXTENSIONS))
+                raise BraidError(f"no source files ({kinds}) found under {path}")
         elif os.path.isfile(path):
             root = os.path.dirname(path)
             rels = [os.path.relpath(path, root)]
         else:
             raise BraidError(f"no such file or directory: {path}")
+
+        try:
+            frontend = lang.detect(rels)
+        except lang.UnknownLanguage as e:
+            raise BraidError(str(e)) from None
 
         repo = cls(root)
         if os.path.isdir(repo.bdir):
@@ -158,15 +134,20 @@ class BraidRepo:
         os.makedirs(repo.objects_dir, exist_ok=True)
         os.makedirs(repo.sessions_dir, exist_ok=True)
 
-        files = {rel: file_state(_read(os.path.join(root, rel))) for rel in rels}
-        repo._write_json("config.json", {"files": sorted(files)})
-        repo._write_json("main.json", {"files": files, "contracts": []})
+        files = {rel: file_state(_read(os.path.join(root, rel)), rel) for rel in rels}
+        repo._write_json("config.json", {"files": sorted(files), "lang": frontend.name})
+        repo._write_json("main.json", {"lang": frontend.name, "files": files, "contracts": []})
         repo._write_json("cells.json", [])
         return repo
 
     # --- main ---
     def load_main(self) -> dict:
-        return self._read_json("main.json")
+        main = self._read_json("main.json")
+        main.setdefault("lang", lang.DEFAULT.name)      # repos created before Go support
+        return main
+
+    def frontend(self):
+        return lang.for_name(self.load_main()["lang"])
 
     def tracked_files(self) -> list:
         return sorted(self.load_main()["files"])
@@ -180,18 +161,20 @@ class BraidRepo:
     # --- sessions ---
     def submit(self, sid: str, path: str, intent: str, contracts: list,
                model: str = "unknown", as_path: str | None = None):
-        main_files = self.load_main()["files"]
+        main = self.load_main()
+        main_files = main["files"]
+        ext = lang.for_name(main["lang"]).ext
         path = os.path.abspath(path)
         edits, sources = {}, {}
         if os.path.isdir(path):
-            for rel in _discover_py(path):
+            for rel in _discover_src(path, (ext,)):
                 text = _read(os.path.join(path, rel))
-                edits[rel] = file_state(text)
+                edits[rel] = file_state(text, rel)
                 sources[rel] = text
         elif os.path.isfile(path):
             rel = as_path or _match_tracked(os.path.basename(path), main_files)
             text = _read(path)
-            edits[rel] = file_state(text)
+            edits[rel] = file_state(text, rel)
             sources[rel] = text
         else:
             raise BraidError(f"no such file or directory: {path}")
@@ -264,7 +247,7 @@ class BraidRepo:
         unit = self.resolve_unit(name)
         path, defname = split_unit(unit)
         src = self.load_main()["files"][path]["defs"][defname]
-        return self._load_log().provenance_of(normalize_hash(src))
+        return self._load_log().provenance_of(lang.normalize_hash(unit, src))
 
     def context_for_hash(self, h: str):
         return self._load_log().context_for(h)
@@ -319,12 +302,12 @@ class BraidRepo:
             # carry over any tracked files that had no units at all (e.g. empty modules)
             for path, st in base_files.items():
                 new_files.setdefault(path, st)
-            self._write_json("main.json", {"files": new_files,
+            self._write_json("main.json", {"lang": main["lang"], "files": new_files,
                                            "contracts": [list(c) for c in final_contracts]})
-            self._write_json("config.json", {"files": sorted(new_files)})
+            self._write_json("config.json", {"files": sorted(new_files), "lang": main["lang"]})
             for path, st in new_files.items():
                 _write(os.path.join(self.root, path),
-                       render_module(st["preamble"], st["order"], st["defs"]))
+                       render_module(st["preamble"], st["order"], st["defs"], path))
             store.save(self.objects_dir)
             self._write_json("cells.json", log.to_list())
             for sid in admitted:
@@ -347,12 +330,12 @@ class BraidRepo:
                 files[rel] = text
                 continue
             try:
-                preamble, order, defs = parse_module(text)
-            except SyntaxError:
+                preamble, order, defs = parse_module(text, rel)
+            except (SyntaxError, ValueError):     # unparseable: hand it over untouched
                 files[rel] = text
                 continue
             defs.pop(name, None)
-            files[rel] = render_module(preamble, [n for n in order if n != name], defs)
+            files[rel] = render_module(preamble, [n for n in order if n != name], defs, rel)
         return Context(intent=ctx.intent, prompt=ctx.prompt, files=files,
                        messages=list(ctx.messages), model=ctx.model, params=dict(ctx.params))
 
@@ -387,7 +370,7 @@ class BraidRepo:
             ctx = load_context(log.store, history[-1].manifest)
             regenerated = realize(unit, self._context_without(ctx, unit), contracts)
             res.rebuilt[unit] = regenerated
-            if normalize_hash(regenerated) == normalize_hash(pinned):
+            if lang.normalize_hash(unit, regenerated) == lang.normalize_hash(unit, pinned):
                 res.identical.append(unit)
             else:
                 res.divergent.append(unit)
@@ -409,7 +392,7 @@ class BraidRepo:
                 new_files.setdefault(path, st)
             for path, st in new_files.items():
                 _write(os.path.join(self.root, path),
-                       render_module(st["preamble"], st["order"], st["defs"]))
+                       render_module(st["preamble"], st["order"], st["defs"], path))
         return res
 
     # --- json helpers ---
@@ -446,12 +429,13 @@ def _label(key: str) -> str:
     return f"{path}::imports" if name == PREAMBLE else key
 
 
-def _discover_py(root: str) -> list:
+def _discover_src(root: str, exts=None) -> list:
+    exts = tuple(exts or lang.EXTENSIONS)
     rels = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".braid" and not d.startswith(".")]
         for fn in filenames:
-            if fn.endswith(".py"):
+            if fn.endswith(exts):
                 rels.append(os.path.relpath(os.path.join(dirpath, fn), root))
     return sorted(rels)
 
